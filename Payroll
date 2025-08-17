@@ -1,0 +1,88 @@
+import streamlit as st
+import pandas as pd
+
+# Federal tax brackets (simplified)
+FEDERAL_TAX_BRACKETS = {
+    "single": [(0, 0.10), (11000, 0.12), (44725, 0.22), (95375, 0.24)],
+    "married": [(0, 0.10), (22000, 0.12), (89450, 0.22), (190750, 0.24)],
+    "head": [(0, 0.10), (15700, 0.12), (59850, 0.22), (95350, 0.24)]
+}
+
+SOC_SEC_RATE = 0.062
+MEDICARE_RATE = 0.0145
+SOC_SEC_WAGE_BASE = 160200
+
+roles = [
+    "Salaried Management", "Hourly Management", "Housekeeper",
+    "Laundry", "Houseman", "Lobby", "Breakfast", "Front Desk",
+    "Driver", "Maintenance"
+]
+
+def calculate_fit(gross, status):
+    brackets = FEDERAL_TAX_BRACKETS.get(status, FEDERAL_TAX_BRACKETS["single"])
+    tax = 0
+    prev = 0
+    for limit, rate in brackets:
+        if gross > limit:
+            tax += (min(gross, limit) - prev) * rate
+            prev = limit
+    return tax
+
+st.title("💼 Texas Payroll Calculator")
+
+employees = []
+with st.form("payroll_form"):
+    name = st.text_input("Employee Name")
+    role = st.selectbox("Role", roles)
+    status = st.selectbox("Filing Status", ["single", "married", "head"])
+    hours = st.number_input("Hours Worked", min_value=0.0, step=0.5)
+    rate = st.number_input("Hourly Rate ($)", min_value=0.0, step=0.5)
+    tips = st.number_input("Tips ($)", min_value=0.0, step=0.5)
+    bonuses = st.number_input("Bonuses ($)", min_value=0.0, step=0.5)
+    incentives = st.number_input("Incentives ($)", min_value=0.0, step=0.5)
+    add_btn = st.form_submit_button("Add Employee")
+    if add_btn and name:
+        employees.append({
+            "Name": name,
+            "Role": role,
+            "Status": status,
+            "Hours": hours,
+            "Rate": rate,
+            "Tips": tips,
+            "Bonuses": bonuses,
+            "Incentives": incentives
+        })
+
+if employees:
+    df = pd.DataFrame(employees)
+
+    # Payroll calculations
+    df["Overtime Hours"] = df["Hours"].apply(lambda h: max(0, h - 40))
+    df["Regular Hours"] = df["Hours"] - df["Overtime Hours"]
+    df["Regular Pay"] = df["Regular Hours"] * df["Rate"]
+    df["Overtime Pay"] = df["Overtime Hours"] * df["Rate"] * 1.5
+    df["Gross Pay"] = df["Regular Pay"] + df["Overtime Pay"] + df["Tips"] + df["Bonuses"] + df["Incentives"]
+
+    df["FIT"] = df.apply(lambda x: calculate_fit(x["Gross Pay"], x["Status"]), axis=1)
+    df["SS"] = df["Gross Pay"].apply(lambda g: min(g, SOC_SEC_WAGE_BASE) * SOC_SEC_RATE)
+    df["Medicare"] = df["Gross Pay"] * MEDICARE_RATE
+    df["Net Pay"] = df["Gross Pay"] - df["FIT"] - df["SS"] - df["Medicare"]
+
+    st.subheader("📊 Payroll Results")
+    st.dataframe(df)
+
+    total_hours = df["Hours"].sum()
+    summary = df.groupby("Role")["Hours"].sum().reset_index()
+    summary["% of Total Hours"] = (summary["Hours"] / total_hours * 100).round(2)
+
+    st.subheader("📈 Summary by Role")
+    st.dataframe(summary)
+
+    # Download to Excel
+    output = pd.ExcelWriter("payroll.xlsx", engine="openpyxl")
+    df.to_excel(output, sheet_name="Payroll Detail", index=False)
+    summary.to_excel(output, sheet_name="Summary", index=False)
+    output.close()
+
+    with open("payroll.xlsx", "rb") as f:
+        st.download_button("📥 Download Excel Report", f, file_name="payroll.xlsx")
